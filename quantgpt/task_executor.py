@@ -25,7 +25,26 @@ logger = logging.getLogger(__name__)
 # Top-level wrappers — must be picklable for ProcessPoolExecutor
 # ---------------------------------------------------------------------------
 
+_LOG_FILE = "/Users/luyumini/quant/QuantGPT/logs/mcp.log"
+
+
+def _setup_worker_logging():
+    """Set up file logging in spawned worker processes (they start fresh, no inherited handlers)."""
+    import logging
+    import os
+    root = logging.getLogger()
+    if any(isinstance(h, logging.FileHandler) for h in root.handlers):
+        return
+    os.makedirs(os.path.dirname(_LOG_FILE), exist_ok=True)
+    fh = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s [worker-%(process)d] %(name)s %(levelname)s %(message)s"))
+    root.addHandler(fh)
+    root.setLevel(logging.INFO)
+    root.info(f"[worker-{os.getpid()}] logging initialized, log → {_LOG_FILE}")
+
+
 def _run_backtest_in_process(market_df, expression, n_groups, holding_period, **kwargs):
+    _setup_worker_logging()
     from quantgpt.backtest import disable_api_context, enable_api_context, run_factor_backtest
     enable_api_context()
     try:
@@ -35,6 +54,7 @@ def _run_backtest_in_process(market_df, expression, n_groups, holding_period, **
 
 
 def _run_backtest_precomputed_in_process(market_df, n_groups, holding_period, cost_rate, precomputed_factor):
+    _setup_worker_logging()
     from quantgpt.backtest import disable_api_context, enable_api_context, run_factor_backtest
     enable_api_context()
     try:

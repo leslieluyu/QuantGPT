@@ -9,6 +9,7 @@ returns per group. The strategy return is the top group's daily return.
 
 import logging
 import threading
+import time
 
 import numpy as np
 import pandas as pd
@@ -88,11 +89,17 @@ def run_factor_backtest(
     """
     _require_api_context()
 
+    _t0 = time.time()
+    n_rows = len(market_df)
+    n_stocks = market_df["stock_code"].nunique() if "stock_code" in market_df.columns else "?"
+    logger.info(f"[backtest] START expr={expression!r} rows={n_rows} stocks={n_stocks} groups={n_groups} hp={holding_period}")
+
     # 1. Compute factor values
     market_df = market_df.copy()
     market_df["trade_date"] = pd.to_datetime(market_df["trade_date"])
     market_df = market_df.sort_values(["stock_code", "trade_date"])
 
+    logger.info(f"[backtest] Step1: computing factor values ... ({time.time()-_t0:.1f}s)")
     if precomputed_factor is not None:
         market_df["factor_value"] = precomputed_factor.reindex(market_df.index) if hasattr(precomputed_factor, 'reindex') else precomputed_factor
     elif expression is not None:
@@ -104,6 +111,7 @@ def run_factor_backtest(
             market_df["factor_value"] = _safe_apply_factor(market_df, factor_func)
     else:
         raise ValueError("必须提供 expression 或 precomputed_factor")
+    logger.info(f"[backtest] Step1 done: factor computed, non-null={market_df['factor_value'].notna().sum()} ({time.time()-_t0:.1f}s)")
 
     # Save raw factor values for IC computation (before neutralization).
     # IC should be computed on raw values (industry standard), while group
@@ -112,6 +120,7 @@ def run_factor_backtest(
 
     # 1b. Neutralize factor values (optional)
     if neutralize_industry or neutralize_cap:
+        logger.info(f"[backtest] Step2: neutralizing factor (industry={neutralize_industry}, cap={neutralize_cap}) ... ({time.time()-_t0:.1f}s)")
         from .neutralize import neutralize_factor
         market_df["factor_value"] = neutralize_factor(
             market_df["factor_value"],
@@ -119,9 +128,12 @@ def run_factor_backtest(
             industry=neutralize_industry,
             market_cap=neutralize_cap,
         )
+        logger.info(f"[backtest] Step2 done ({time.time()-_t0:.1f}s)")
 
     # 3. Compute daily returns from close prices (T-1 close → T close)
+    logger.info(f"[backtest] Step3: computing daily returns ... ({time.time()-_t0:.1f}s)")
     market_df["daily_ret"] = market_df.groupby("stock_code")["close"].pct_change()
+    logger.info(f"[backtest] Step3 done ({time.time()-_t0:.1f}s)")
 
     # 4. Identify rebalance dates
     all_dates = sorted(market_df["trade_date"].unique())
@@ -212,7 +224,9 @@ def run_factor_backtest(
     if work["_group"].nunique() < 2:
         raise ValueError("Could not form enough quantile groups")
 
+    logger.info(f"[backtest] Step4-5: group assignment done, work rows={len(work)} ({time.time()-_t0:.1f}s)")
     # 6. Daily equal-weighted group returns
+    logger.info(f"[backtest] Step6: computing group returns ... ({time.time()-_t0:.1f}s)")
     daily_group_ret = (
         work.groupby(["trade_date", "_group"])["daily_ret"]
         .mean()
@@ -280,11 +294,13 @@ def run_factor_backtest(
     if flipped:
         spread = -spread
 
+    logger.info(f"[backtest] Step7-8: L/S metrics done, ls_sharpe={ls_sharpe:.3f} ({time.time()-_t0:.1f}s)")
     # 9. IC / Rank IC / IR / IC win rate
     # Use raw (pre-neutralization) factor values for IC — industry standard.
     # Neutralization is for portfolio construction only, not IC measurement.
     # Primary IC metric is Rank IC (Spearman) — more robust to outliers,
     # consistent with industry convention (Barra, etc.).
+    logger.info(f"[backtest] Step9: computing IC series ... ({time.time()-_t0:.1f}s)")
     work_ic = work.copy()
     work_ic["factor_value"] = raw_factor_for_ic.reindex(work_ic.index)
     pearson_ic_series, rank_ic_series = _calc_ic_series(work_ic, holding_period)
@@ -350,11 +366,14 @@ def run_factor_backtest(
         effective_turnover = max(turnover, 0.125)
         wq_fitness = float(ls_sharpe * np.sqrt(abs(ls_annual) / effective_turnover))
 
+    logger.info(f"[backtest] Step9 done: IC={ic_mean:.4f} IR={ic_ir:.3f} win_rate={ic_win_rate:.2f} ({time.time()-_t0:.1f}s)")
     # 13. WQ BRAIN dollar-neutral simulation (continuous weights, WQ-aligned metrics)
+    logger.info(f"[backtest] Step13: WQ simulation ... ({time.time()-_t0:.1f}s)")
     wq_work = work[["trade_date", "stock_code", "factor_value", "daily_ret"]].copy()
     if flipped:
         wq_work["factor_value"] = -wq_work["factor_value"]
     wq_brain = wq_simulate(wq_work, rebalance_dates_set, trading_days_per_year)
+    logger.info(f"[backtest] DONE total={time.time()-_t0:.1f}s")
 
     return {
         "strategy_returns": strategy_series,
@@ -376,7 +395,9 @@ def run_factor_backtest(
         "cost_adjusted": cost_adjusted,
         "cost_rate": cost_rate,
         "total_cost_drag": round(total_cost_drag, 6),
-        "_factor_df": work[["trade_date", "stock_code", "factor_value", "daily_ret"]].copy(),
+        "_factor_df": work[["trade_date", "stock_code", "daily_ret"]].assign(
+            factor_value=raw_factor_for_ic.reindex(work.index)
+        ),
         "_stock_factor_data": stock_factor_data,
     }
 

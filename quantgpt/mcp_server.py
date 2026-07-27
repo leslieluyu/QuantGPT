@@ -14,6 +14,7 @@ Provides tools for Agent-driven backtest workflow:
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 import traceback
@@ -40,6 +41,13 @@ from .task_executor import _run_backtest_in_process, get_executor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s", stream=sys.stderr)
 logger = logging.getLogger(__name__)
+
+_LOG_FILE = "/Users/luyumini/quant/QuantGPT/logs/mcp.log"
+os.makedirs(os.path.dirname(_LOG_FILE), exist_ok=True)
+_file_handler = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+logging.getLogger().addHandler(_file_handler)
+logger.info(f"=== QuantGPT MCP server started (pid={os.getpid()}) log → {_LOG_FILE} ===")
 
 mcp = FastMCP(
     "quantgpt",
@@ -291,19 +299,27 @@ async def score_factor(
     })
     _error_msg = None
     _result = None
+    _t0 = time.time()
+    logger.info(f"[score_factor] START expr={expression!r} universe={universe} {start_date}~{end_date}")
     try:
+        logger.info(f"[score_factor] Step1: fetching market data ...")
         market_df, stock_codes = await asyncio.to_thread(_fetch_data_for_market, universe, start_date, end_date)
         if market_df is None or len(market_df) == 0:
             return json.dumps({"error": "No market data available."})
+        logger.info(f"[score_factor] Step1 done: {len(stock_codes)} stocks, {len(market_df)} rows ({time.time()-_t0:.1f}s)")
 
+        logger.info(f"[score_factor] Step2: enriching fundamentals ...")
         market_df = await asyncio.to_thread(_enrich_with_fundamentals, expression, market_df, stock_codes, start_date, end_date)
+        logger.info(f"[score_factor] Step2 done ({time.time()-_t0:.1f}s)")
 
+        logger.info(f"[score_factor] Step3: running backtest in worker process ...")
         executor = get_executor()
         future = executor.submit_cpu_work(
             _run_backtest_in_process, market_df, expression, n_groups, holding_period,
             neutralize_industry=neutralize_industry, neutralize_cap=neutralize_cap,
         )
         result = await asyncio.to_thread(future.result, 600)
+        logger.info(f"[score_factor] Step3 done: IC={result.get('ic_mean',0):.4f} IR={result.get('ic_ir',0):.3f} mono={result.get('monotonicity_score',0):.2f} ({time.time()-_t0:.1f}s)")
 
         bm_returns = None
         try:
@@ -311,6 +327,7 @@ async def score_factor(
         except Exception:
             pass
 
+        logger.info(f"[score_factor] Step4: generating report ...")
         report_result = await asyncio.to_thread(
             generate_report,
             result["ls_returns"],
@@ -318,6 +335,7 @@ async def score_factor(
             title="Factor Score",
         )
 
+        logger.info(f"[score_factor] Step5: computing final score ...")
         scoring = compute_factor_score(
             backtest_summary={
                 "long_short_sharpe": result["long_short_sharpe"],
@@ -330,6 +348,7 @@ async def score_factor(
             },
             report_metrics=report_result["metrics"],
         )
+        logger.info(f"[score_factor] DONE: score={scoring['score']:.1f} grade={scoring['grade']} total={time.time()-_t0:.1f}s")
 
         _result = {
             "score": scoring["score"],
