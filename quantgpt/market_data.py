@@ -86,6 +86,52 @@ def _from_rq_code(rq_code: str) -> str:
     return f"{prefix}.{num}"
 
 
+# ─── TickFlow helpers ──────────────────────────────────────────────
+
+_TF_API_KEY    = "tk_067503ace4224731b7b656fe2793e5d0"
+_TF_BATCH_URL  = "https://api.tickflow.org/v1/klines/batch"
+_TF_BATCH_SIZE = 100
+_TF_BATCH_SLEEP = 1.0          # seconds between batch requests
+
+
+def _bs_to_tf(bs_code: str) -> str:
+    """sh.600519 → 600519.SH"""
+    prefix, num = bs_code.split(".", 1)
+    return f"{num}.{prefix.upper()}"
+
+
+def _tf_to_bs(tf_code: str) -> str:
+    """600519.SH → sh.600519"""
+    num, suffix = tf_code.rsplit(".", 1)
+    return f"{suffix.lower()}.{num}"
+
+
+def _fetch_tf_batch(tf_symbols: list, count: int = 10000) -> dict:
+    """Call TickFlow batch kline API. Returns {tf_symbol: DataFrame(index=date)}."""
+    import requests as _requests
+    syms_str = ",".join(tf_symbols)
+    url = f"{_TF_BATCH_URL}?symbols={syms_str}&period=1d&count={count}&adjust=forward"
+    resp = _requests.get(url, headers={"x-api-key": _TF_API_KEY}, timeout=30)
+    resp.raise_for_status()
+    raw = resp.json()
+    result = {}
+    for sym, vals in raw.get("data", {}).items():
+        ts = vals.get("timestamp")
+        if not ts:
+            continue
+        df = pd.DataFrame({
+            "date":   pd.to_datetime([t // 1000 for t in ts], unit="s").normalize(),
+            "open":   vals["open"],
+            "high":   vals["high"],
+            "low":    vals["low"],
+            "close":  vals["close"],
+            "volume": [v * 100 for v in vals["volume"]],   # 手→股
+            "amount": vals["amount"],
+        })
+        result[sym] = df.set_index("date").sort_index()
+    return result
+
+
 # ─── rqdatac initialization ────────────────────────────────────────
 
 def _rqdatac_init() -> bool:
@@ -438,6 +484,51 @@ class MarketDataFetcher:
 
     # --- PLACEHOLDER_FETCH_REMOTE ---
 
+    def _fetch_remote_tf_batch(self, stock_codes: list, start_date: str, end_date: str) -> dict:
+        """Batch-fetch stocks from TickFlow. Returns {bs_code: full_history_df} (unfiltered).
+
+        Fetches full history (count=10000) so the result can be cached once and reused
+        for any date range without re-downloading.
+        """
+        norm_codes = [self._normalize_stock_code(c) for c in stock_codes]
+        tf_map = {_bs_to_tf(bs): bs for bs in norm_codes}   # tf_code → bs_code
+        tf_syms = list(tf_map.keys())
+        batches = [tf_syms[i:i+_TF_BATCH_SIZE] for i in range(0, len(tf_syms), _TF_BATCH_SIZE)]
+
+        results = {}
+        for bi, batch in enumerate(batches):
+            t0 = time.time()
+            try:
+                raw = _fetch_tf_batch(batch)
+            except Exception as e:
+                logger.warning(f"[tickflow] batch {bi+1}/{len(batches)} failed: {e}")
+                if bi < len(batches) - 1:
+                    time.sleep(_TF_BATCH_SLEEP)
+                continue
+
+            for tf_sym, df in raw.items():
+                bs_code = tf_map.get(tf_sym)
+                if bs_code is None:
+                    continue
+                df = df.reset_index().rename(columns={"date": "trade_date"})
+                df["stock_code"] = bs_code
+                df["trade_date"] = pd.to_datetime(df["trade_date"])
+                for col in ("open", "high", "low", "close", "volume", "amount"):
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                df["pct_change"] = df["close"].pct_change() * 100
+                df = df[["trade_date", "stock_code", "open", "high", "low", "close",
+                          "volume", "amount", "pct_change"]].sort_values("trade_date")
+                results[bs_code] = df
+
+            logger.info(
+                f"[tickflow] batch {bi+1}/{len(batches)}: "
+                f"{len(raw)}/{len(batch)} stocks ok  ({time.time()-t0:.1f}s)"
+            )
+            if bi < len(batches) - 1:
+                time.sleep(_TF_BATCH_SLEEP)
+
+        return results
+
     def _fetch_remote_rq(self, stock_codes: list[str], start_date: str, end_date: str) -> dict[str, pd.DataFrame]:
         """Batch fetch stocks from rqdatac. Returns {bs_code: DataFrame} dict."""
         if not _rqdatac_init():
@@ -546,14 +637,37 @@ class MarketDataFetcher:
             if CACHE_ONLY:
                 logger.warning(f"Cache-only mode: {len(to_fetch)} stocks not cached, skipping fetch")
             else:
-                # Primary: baostock batch (free, no account needed)
-                bs_fetched = set()
-                if HAS_BAOSTOCK:
-                    logger.info(f"[baostock] Fetching {len(to_fetch)} stocks...")
+                tf_fetched: set = set()
+
+                # Primary: TickFlow batch (100 stocks/request, ~10s for 1000 stocks)
+                logger.info(f"[tickflow] Fetching {len(to_fetch)} stocks in batches of {_TF_BATCH_SIZE}...")
+                try:
+                    tf_results = self._fetch_remote_tf_batch(to_fetch, start_date, end_date)
+                    for bs_code, df in tf_results.items():
+                        if df is None or len(df) == 0:
+                            continue
+                        # Save full history to cache so future date ranges skip network
+                        existing = self._load_cache(bs_code)
+                        if existing is not None:
+                            df = pd.concat([existing, df]).drop_duplicates("trade_date", keep="last").sort_values("trade_date")
+                        self._save_cache(bs_code, df)
+                        filtered = df[(df["trade_date"] >= req_start) & (df["trade_date"] <= req_end)]
+                        if len(filtered) > 0:
+                            all_data.append(filtered)
+                        tf_fetched.add(self._normalize_stock_code(bs_code))
+                    logger.info(f"[tickflow] Done: {len(tf_fetched)}/{len(to_fetch)} stocks fetched")
+                except Exception as e:
+                    logger.warning(f"[tickflow] Batch fetch failed entirely: {e}, falling back to baostock")
+
+                # Fallback: baostock for any TickFlow missed
+                bs_remaining = [c for c in to_fetch if self._normalize_stock_code(c) not in tf_fetched]
+                bs_fetched: set = set()
+                if bs_remaining and HAS_BAOSTOCK:
+                    logger.info(f"[baostock] Fetching {len(bs_remaining)} remaining stocks...")
                     with _bs_lock:
                         _baostock_login()
                         try:
-                            for code in to_fetch:
+                            for code in bs_remaining:
                                 df = self._fetch_remote_bs(code, start_date, end_date, already_logged_in=True)
                                 if df is not None and len(df) > 0:
                                     existing = self._load_cache(code)
@@ -568,7 +682,9 @@ class MarketDataFetcher:
                             _baostock_logout()
 
                 # Fallback: rqdatac for remaining stocks (optional, paid)
-                rq_remaining = [c for c in to_fetch if self._normalize_stock_code(c) not in bs_fetched]
+                rq_remaining = [c for c in to_fetch
+                                if self._normalize_stock_code(c) not in tf_fetched
+                                and self._normalize_stock_code(c) not in bs_fetched]
                 if rq_remaining and _rqdatac_init():
                     for i in range(0, len(rq_remaining), 200):
                         chunk = rq_remaining[i:i+200]
