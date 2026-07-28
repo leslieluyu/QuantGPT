@@ -106,14 +106,25 @@ def _tf_to_bs(tf_code: str) -> str:
     return f"{suffix.lower()}.{num}"
 
 
-def _fetch_tf_batch(tf_symbols: list, count: int = 10000) -> dict:
-    """Call TickFlow batch kline API. Returns {tf_symbol: DataFrame(index=date)}."""
+def _fetch_tf_batch(tf_symbols: list, count: int = 10000, max_retries: int = 3) -> dict:
+    """Call TickFlow batch kline API with retry. Returns {tf_symbol: DataFrame(index=date)}."""
     import requests as _requests
     syms_str = ",".join(tf_symbols)
     url = f"{_TF_BATCH_URL}?symbols={syms_str}&period=1d&count={count}&adjust=forward"
-    resp = _requests.get(url, headers={"x-api-key": _TF_API_KEY}, timeout=30)
-    resp.raise_for_status()
-    raw = resp.json()
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            resp = _requests.get(url, headers={"x-api-key": _TF_API_KEY}, timeout=30)
+            resp.raise_for_status()
+            raw = resp.json()
+            break
+        except Exception as e:
+            last_exc = e
+            wait = 2 ** attempt          # 1s, 2s, 4s
+            logger.warning(f"[tickflow] attempt {attempt+1}/{max_retries} failed: {e}, retry in {wait}s")
+            time.sleep(wait)
+    else:
+        raise last_exc
     result = {}
     for sym, vals in raw.get("data", {}).items():
         ts = vals.get("timestamp")
