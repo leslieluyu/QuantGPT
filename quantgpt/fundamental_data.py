@@ -145,9 +145,9 @@ class FundamentalDataFetcher:
         try:
             df = pd.read_parquet(path)
             if "pub_date" in df.columns:
-                df["pub_date"] = pd.to_datetime(df["pub_date"])
+                df["pub_date"] = pd.to_datetime(df["pub_date"]).astype("datetime64[ns]")
             if "stat_date" in df.columns:
-                df["stat_date"] = pd.to_datetime(df["stat_date"])
+                df["stat_date"] = pd.to_datetime(df["stat_date"]).astype("datetime64[ns]")
             return df
         except Exception:
             return None
