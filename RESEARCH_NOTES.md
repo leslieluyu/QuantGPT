@@ -747,6 +747,7 @@ OBV：anti_overfit 4/4 PASS(100)，yearly IC全正(0.019-0.089)，半衰期999�
 ### 跨宇宙验证：csi500通过，hs300真实失效
 
 - **csi500**：冠军和生产候选IC都能穿越（0.068~0.070），生产候选依然优于冠军单独使用，anti_overfit 4/4 PASS。冠军单独在csi500上明显比csi1000弱（Sharpe 1.26→0.16），组合更稳健。
+- **csi2000**：total_share原本完全缺失（该宇宙从未被历史回填过），跑完全量回填（1918/1971成功，94.2min）后验证——生产候选 score=83.2(A), IC=0.111（三宇宙最高）, anti_overfit 4/4 PASS；冠军单独 mono仅0.4(不单调)。三个中小盘宇宙(csi1000/csi500/csi2000)全部验证通过。
 - **hs300**：生产候选和冠军**真实失效**（MaxDD分别-49.5%/-95.3%，mono仅0.2-0.3），anti_overfit仅2/4 PASS，安慰剂检验FAIL（真实IC低于随机排列95分位数），2020年IC为负出现reversal。**这不是300只股票分组样本量小的噪音，是统计上确认的真实失效**——这套"缩量低换手+正交扩展"逻辑仅适用于中小盘（csi1000/csi500），不适用于沪深300等大盘蓝筹宇宙。详见 [docs/knowledge/findings/production-candidate-comparison.md](docs/knowledge/findings/production-candidate-comparison.md)。
 
 ### Bug修复：hs300专属的merge_asof日期类型不一致
