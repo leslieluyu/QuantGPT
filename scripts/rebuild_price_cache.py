@@ -23,7 +23,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 STOCK_DIR   = PROJECT_DIR / "data" / "stocks"
 UNI_DIR     = PROJECT_DIR / "data" / "universe"
 
-TF_PRO_KEY   = os.environ.get("TICKFLOW_PRO_API_KEY", "tk_1c69b71082bb48a2a129cdec976aabf8")
+TF_PRO_KEY   = os.environ.get("TICKFLOW_PRO_API_KEY", "")
 TF_BATCH_URL = "https://api.tickflow.org/v1/klines/batch"
 TF_BATCH_SIZE = 100
 TF_BATCH_SLEEP = 2.0   # 30 batch calls/min → 2s 间隔

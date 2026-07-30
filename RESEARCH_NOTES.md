@@ -10,6 +10,37 @@
 
 ---
 
+## 因子机制分类总纲（2026-07-30）
+
+覆盖当前项目累计测试过的全部机制大类 + 已识别但未测试的空白区，作为后续挖掘的优先级参考。
+
+| 类别 | 具体方向 | 状态 | 关键结果 | 预期价值 | 备注 |
+|---|---|---|---|---|---|
+| 量能/换手率 | volume/ts_mean(volume,60) + 换手率(volume/total_share) | ✅ 已验证=冠军 | score≈60-71, IC=0.084, WF 27/28(96%,含幸存者偏差) | — | `amtrev_x_turn_v2`，已饱和 |
+| 量能衰减 | decay_linear(volume,20) 版本 | ✅ 已验证 | anti_overfit 4/4, WF 26/28(93%) | — | 与冠军逻辑重叠(G4塌陷)，不建议再叠加 |
+| 量价相关性 | ts_corr(volume/amount, close, N) | ✅ 已验证=新正交因子 | score=82, IC=0.063, 与冠军相关性0.265, WF 2/2正 | — | 本轮最大收获，`ts_corr(volume,close,10)` |
+| 价格位置(区间位置) | (close-low)/(high-low), sign(close-open) | ✅ 已测试=弱 | IC≈0.02, C/D级 | 低 | 单独用弱，可能只在champ+low_cs20组合里有价值 |
+| 历史波动率 | ts_std(pct_change/ret,N), GK波动率 | ❌ 已关闭 | 相关性0.567(与冠军), 2024年IC衰减 | 低 | 本轮二次验证坐实了原有判断 |
+| ts_rank百分位 | ts_rank(volume/amount, N) | ❌ 已测试=非正交 | score=80, 相关性0.658(与冠军) | 低 | 换手率逻辑的百分位变体 |
+| 非线性变换(post-rank) | sign_power/tanh 套在外层rank() | ❌ 已证伪 | 数学上rank-invariant，3变体分数几乎相同 | 低 | 若要再试必须放进ts_mean内部才有意义 |
+| 动量 | ret_20d/ret_60d | ❌ 已关闭 | A股月频动量IC为负(与美股相反) | 低 | — |
+| 短期反转 | ret_1d/ret_5d | ❌ 已关闭 | 月频下IC为负 | 低 | — |
+| 52周高点距离 | 距离年内高点比例 | ❌ 已关闭 | 方向不稳，C级 | 低 | — |
+| 隔夜跳空 | overnight gap | ❌ 已关闭 | IC=0.026，太弱 | 低 | — |
+| 基本面 | PE/PB/ROE/净利润增速 | ❌ 已关闭(且当前无数据) | IC≈0，季报滞后已被定价 | 低 | 缓存里也没有这些字段了 |
+| **市值/规模** | rank(-1\*close\*total_share) | ✅ 已验证=新正交因子 | score=77(B), IC=0.081, anti_overfit 4/4, WF 1窗口正, 与冠军相关性-0.03 | — | 慢变量，半衰期999天，IC随周期变长增强 |
+| 经典技术指标 | RSI/MACD/BOLL/ATR/OBV/EMA/WMA | ✅ 已扫描 | ATR最强(0.109)但与已关闭波动率方向相关0.575；**OBV正交(0.241)**；MACD/布林带mono差 | — | **OBV是新正交因子**，见下方汇总行 |
+| **OBV** | rank(-1\*obv(close,20)) | ✅ 已验证=新正交因子 | score=71.7(B), IC=0.071, anti_overfit 4/4, WF 2/2正(decay为负), 与冠军/市值/ts_corr相关性均<0.27 | — | 第三个独立正交维度 |
+| 流动性冲击(Amihud式) | rank(ts_mean(abs(pct_change)/amount, 10)) | ❌ 已测试=非正交 | score=80.8(A), IC=0.103, mono=1.0；但与市值因子相关性**0.588**、与冠军0.402 | 低 | 分数很高但被市值因子解释——illiquidity本质是size effect的另一种包装(学界常识)，非新维度 |
+| 日历/季节效应 | rank(day)/weekday/month | ❌ 已证伪 | IC=0.0, mono=0.0（D级） | 低 | **数学上必然退化**：day/weekday/month对同一交易日所有股票是常数，横截面rank无意义；如需用日历效应必须做成regime条件(trade_when)而非独立rank因子 |
+| **组合叠加** | 冠军 + ts_corr + 市值 + OBV | ✅ 已验证 | 四合一score=87.5,IR=1.03,Sharpe=2.04；五合一score=87.0,IC=0.148,MaxDD=-12.9%(最优) | — | 三个正交分量两两相关性低，叠加有真实分散化收益 |
+| 行业相对排名 | group_rank/group_zscore | ✅ 已测试=非新维度 | score普遍B/A,anti_overfit 4/4,但与全市场母版本相关性0.88-0.89 | 低(作为新alpha) | 不是新正交信号，是已发现因子的行业相对改良实现（MaxDD更优，可用于生产） |
+| 条件/regime因子 | trade_when(...) | ⬜ 从未测试 | — | 低 | 工程复杂度高，且没有明确的regime信号候选 |
+
+**当前状态（2026-07-30 全部完成）**：总纲表里列出的全部方向均已测试或明确归类关闭。流动性冲击(Amihud)分数很高(80.8 A)但被市值因子解释(相关性0.588)，非独立维度；日历效应被证明数学上退化(常数横截面排序无意义)；行业相对排名(group_rank)技术上已接入可用，但测试显示是已发现因子的行业相对改良版而非新维度。**至此5个原始方向+市值+技术指标+流动性+日历+行业相对排名共10条线索全部跑完，累计发现3个独立正交信号（ts_corr/市值/OBV），行业中性化压力测试确认三者IC稳健(Phase11)，暂无更多待测的高预期价值方向。**
+
+---
+
 ## 全局排行榜（跨所有测试阶段）
 
 | # | 因子名 | 表达式 | 得分 | AO | RV | 宇宙 | hp |
@@ -575,3 +606,140 @@ combo    : +55.3% | +35.9% | +43.3% | +15.2% | +63.4%  ← G4塌陷
 | MCP 工具（8 项） | ✅ CACHE_ONLY=1 模式全部可用，绕过 baostock |
 | 自治 Agent Prompt | ✅ PROMPT_AGENT.md 就绪 |
 | 下一步 | 在服务器上启动自治挖掘循环，目标找到正交于"缩量低换手"的新信号维度 |
+
+---
+
+## Phase 9：自治 Agent 首轮运行 + 正交信号发现（2026-07-30）
+
+### 新发现：量价相关性正交信号
+
+方向 A（ts_corr）第一批扫描即命中。`rank(-1*ts_corr(volume, close, 10))`：
+
+- score=82.0（A级），IC=0.063，IR=0.75，mono=0.90
+- anti_overfit 4/4 PASS（综合分100，yearly IC 2020-2024 全正）
+- 与冠军 `amtrev_x_turn_v2` 截面相关性 0.265（<0.3 正交阈值）
+- Walk-Forward：2/2 窗口 test_IC 为正（0.061/0.050），decay stable（几乎不衰减，三个候选里最稳）
+
+同族候选 `rank(-1*ts_corr(amount, close, 20))`（score 81.6，相关性 0.263，decay stable）与 `rank(-1*ts_std(close/vwap, 20))`（score 83.6 最高，但相关性 0.416 超阈值、decay unstable）。详见 [docs/knowledge/findings/volume-price-corr-orthogonal.md](docs/knowledge/findings/volume-price-corr-orthogonal.md)。
+
+`ts_corr(volume,close,N)` 符号随窗口长度反转：N=10/20 需要 `-1*`，N=40 原始方向已经是对的（加 `-1*` 反而错）。
+
+### Bug 修复（本轮新增，均已验证生效）
+
+| 问题 | 修复位置 | 说明 |
+|------|----------|------|
+| 硬编码 macOS 日志路径 | `task_executor.py:28`（`mcp_server.py` 之前已修） | worker 子进程 `os.makedirs("/Users/...")` 权限拒绝，改用 `Path(__file__)` 相对路径 |
+| `compute_factor_values` 忽略 date 参数 | `mcp_server.py:934` | `get_universe(universe)` 没传 `date=start_dt`，永远按"今天"查成分股缓存，导致 csi1000 恒为空。已改为与其他工具一致的 `get_universe(universe, date=start_dt)` |
+| worker 进程数偏保守 | `task_executor.py:95` | 默认 `min(4, cpu_count)` 改为 `max(1, cpu_count-1)`（本机6核→5 worker）；`.env` 里 `QUANTGPT_WORKER_PROCESSES` 同步从 4 改到 5 |
+| **`run_rolling_validation` 假性"数据不足"** | `rolling_validator.py:130` | 窗口生成用 `test_end > max_date` 严格判断，任务固定参数 `end_date=2024-12-31` 卡在 5 年整边界，一个窗口都生成不出来。价格缓存实际到 2026-07，把调用时的 `end_date` 放宽到 2025-06-30 左右即可正常出 WF 结果（不是数据缺失，是调用参数问题，源码未改） |
+| 冠军因子 `amtrev_x_turn_v2` 跑 `run_rolling_validation` 报错 "Not enough rebalance dates for backtest" | 待查 | 新候选因子（不依赖 total_share）不受影响，怀疑与 total_share 基本面数据在窗口切片后的对齐/dropna 有关，本轮未深入 |
+
+### 安全问题：TickFlow API key 硬编码
+
+`market_data.py:91` 和 `scripts/rebuild_price_cache.py:26` 曾各硬编码一个 TickFlow key，且已随 commit `8f4a05c`/`8020524` 推送到 `github.com/leslieluyu/QuantGPT`（origin/main）。已改为从环境变量读取（`TICKFLOW_API_KEY` / `TICKFLOW_PRO_API_KEY`，无 fallback），真实值移入本地 `.env`（已 gitignore），`.env.example` 补充占位说明。**Git 历史里这两个 commit 仍包含明文 key，如需彻底清除需要改写历史；建议尽快在 TickFlow 后台轮换这两个 key。**
+
+### 方向 B/C/D 扫描结果（无新突破，均已归档）
+
+- **方向B（价格位置）**：`ts_std(pct_change, N)`（N=10/15/20）全部 A 级（score 82+），但验证后与冠军相关性高达 0.567，且 2024 年 IC 明显衰减（0.055 vs 其他年份 0.09-0.12）——精确复现了已关闭方向"历史波动率"的失效模式，不是新信号。`(close-low)/(high-low)`、`sign(close-open)` 系列价格位置因子普遍偏弱（C/D级）。
+- **方向C（ts_rank百分位）**：`ts_rank(volume/amount, 60)` 系列 A/B 级（最高 `ts_rank(amount,60)` score=80.0），但与冠军相关性 0.658，本质是冠军"量/60日均量"逻辑的百分位版本，非正交。20日窗口版本明显更弱（score降至62）。
+- **方向D（非线性变换）**：验证了一个数学结论——`rank()` 外层套 `sign_power`/`tanh` 等单调变换对最终排序无影响（rank-invariant），3 个变体分数几乎位数级相同。非线性变换只有放进 `ts_mean` 等聚合内部才可能改变结果，但测试的 log 版本反而比线性基线弱。详见 [docs/knowledge/failures/nonlinear-post-rank-noop.md](docs/knowledge/failures/nonlinear-post-rank-noop.md)。
+
+### 方法论澄清：csi1000 历史 universe 快照
+
+`data/universe/` 下 csi1000 成分股快照实际只有 `2017-01`、`2020-01` 两个月份。Phase 7 的"28窗口/20年 WF"验证本身就是用 `2020-01` 静态快照套用到 2004-2024 全历史（笔记里已标注"含幸存者偏差"），并非真的逐月拿到历史成分股。本轮沙箱环境无法访问 baostock（DNS/连接超时，普通 HTTPS 出网正常），无法回补更多月份快照，因此新候选因子的 WF 验证目前只能生成 2 个窗口（用 anti_overfit 4/4 作为主要验证标准，WF 作为补充确认）。
+
+---
+
+## Phase 10：市值因子 + 组合叠加 + 技术指标扫描（2026-07-30）
+
+### 全局分类总纲
+
+新增"因子机制分类总纲"章节（见"研究概述"之后），汇总所有已测/已关闭/未测方向及预期价值，作为后续挖掘的优先级参考索引。
+
+### 市值/规模因子（新发现，已验证）
+
+`rank(-1*close*total_share)`：score=77.0(B), IC=0.081, turnover=0.008（极低）, anti_overfit 4/4 PASS(100)。**半衰期999天，IC随周期变长反而增强**——与所有量价类因子（半衰期50-110天，IC随周期衰减）动态特征相反，证明是完全不同的经济机制（慢变量）。与冠军相关性-0.030，与ts_corr新因子相关性0.053，双双正交。WF（1窗口）test_IC=0.055。详见 [docs/knowledge/findings/market-cap-factor-and-combo.md](docs/knowledge/findings/market-cap-factor-and-combo.md)。
+
+### 方向E：组合叠加测试
+
+用等权求和验证正交因子叠加是否真的提升组合质量：
+
+| 组合 | score | IC | IR | Sharpe | anti_overfit | WF test_IC/IR/decay |
+|---|---|---|---|---|---|---|
+| 冠军+ts_corr | 84.7 A | 0.107 | 0.86 | 1.51 | — | — |
+| 冠军+市值 | 86.2 A | 0.139 | 0.91 | 1.91 | 4/4(100) | 0.105/0.59/0.047 |
+| 冠军+ts_corr+市值（四合一） | 87.5 A | 0.137 | **1.03** | **2.04** | 4/4(100) | 0.139/**1.06**/**-0.19（样本外更强）** |
+| 冠军+ts_corr+市值+OBV（五合一） | 87.0 A | **0.148** | 0.96 | 2.01 | 4/4(100) | — |
+
+三/四/五个正交分量两两相关性都很低，叠加带来真实的分散化收益，不是重复计数。**四合一或五合一均可作为生产候选**，前者IR更优，后者IC绝对值和回撤更优。
+
+### 技术指标家族扫描（RSI/MACD/OBV/ATR/布林带，此前从未测试过）
+
+| 指标 | score | IC | 与冠军相关性 | 结论 |
+|---|---|---|---|---|
+| ATR(20) | 79.8 B | 0.109 | 0.424 | 与已关闭的"历史波动率"方向相关性0.575，本质同一信号，非新发现 |
+| **OBV(close,20)** | 71.7 B | 0.071 | **0.241** | **新正交信号**：与市值因子0.127、与ts_corr新因子几乎为零(-0.0002)、与低波动因子0.270，全部<0.3 |
+| RSI(14) | 66.4 B | 0.047 | 0.349(临界) | 弱正交，分数较低，暂不优先 |
+| MACD(20) | 43-46 C | ±0.028 | — | mono仅0.1，分组不单调，不推荐 |
+| 布林带位置/偏离 | 62-65 B | -0.06~0.05 | — | mono 0.4-0.7，一般 |
+
+OBV：anti_overfit 4/4 PASS(100)，yearly IC全正(0.019-0.089)，半衰期999天(同市值因子的"慢变量"特征)，WF 2/2窗口正且**decay为负（样本外更强）**。详见 [docs/knowledge/findings/obv-orthogonal-and-five-way-combo.md](docs/knowledge/findings/obv-orthogonal-and-five-way-combo.md)。
+
+### 累计正交信号清单（与冠军 amtrev_x_turn_v2 相关性均<0.3）
+
+1. `ts_corr(volume, close, 10)` — 量价短期相关性
+2. `close*total_share`（市值） — 慢变量，近乎不衰减
+3. `obv(close, 20)` — OBV动量，同样是慢变量特征
+
+三者两两相关性也都很低，是真正独立的三个维度。
+
+---
+
+## Phase 11：接入行业分类数据 + 行业中性化压力测试（2026-07-30）
+
+### 行业数据接入
+
+从 `stock_tracker/data/research/sw_industry.csv`（5533只股票，5203只有有效行业标注，与QuantGPT代码格式`sh./sz.`兼容）转换写入 `QuantGPT/data/industry/industry_2026-07.parquet`，对接现成的 `get_industry_data()`（`quantgpt/neutralize.py:133`，此前因无数据源一直返回None，`neutralize_industry`参数和`group_rank`/`group_zscore`算子实际上是空转的）。同时给 `get_industry_data()` 加了一个小改进：当前月份缓存不存在时回退到最近一个可用月份文件（行业分类变化很慢，没必要每月手动重新生成）。csi1000覆盖率92.9%。
+
+**至此 `neutralize_industry=true`、`group_rank(col, industry)`、`group_zscore(col, industry)` 全部首次真正可用。**
+
+### 行业中性化压力测试：IC稳健，但naive换手成本会吃掉大部分表面收益
+
+用 `neutralize_industry=true` 重新测本session发现的全部因子，出现一个"评分从B/A暴跌到C(59.9)"的现象——排查后确认**不是bug**，是 `iteration.py:100-107` 的评分保护机制（quantstats算出的真实多空组合Sharpe或CAGR为负时，评分强制封顶59.9/C），是故意设计防止"IC好看但实际组合亏钱"误导人。
+
+**但触发这个封顶的背后原因很重要**：
+
+| 因子 | neutralize_industry=false | neutralize_industry=true（score_factor,cost_rate=0.3%）| neutralize_industry=true（anti_overfit,cost_rate=0）|
+|---|---|---|---|
+| 冠军 | Sharpe=1.26, turnover=0.075 | Sharpe=**+0.076**(勉强为正,未封顶), turnover=0.075(**不变**) | IC=0.083(vs原始0.084,**几乎不变**), 4/4 PASS |
+| 市值因子 | Sharpe未测,turnover=**0.008** | Sharpe=**-0.45**(封顶), turnover=**0.074(暴涨9倍!)** | IC=0.080(vs原始0.081,**几乎不变**), 4/4 PASS |
+| OBV | turnover=**0.005** | Sharpe=**-0.06**(封顶), turnover=**0.072(暴涨14倍!)** | IC=0.062(vs原始0.071,小幅下降), 4/4 PASS |
+| ts_corr | turnover=0.069 | Sharpe=**-0.27**(封顶), turnover=0.075 | IC=0.055(vs原始0.063,小幅下降), 4/4 PASS |
+| 五合一组合 | Sharpe=2.01 | Sharpe=**-0.68**(封顶) | IC=**0.125**(vs原始0.148,仍很强), 4/4 PASS,yearly IC全正(0.075~0.164) |
+
+**结论**：
+- 用**无成本的纯IC视角**（`anti_overfit`）检验，所有因子的统计edge在行业中性化后**几乎完好无损地保留**——说明这些因子的选股能力是真实的股票特异性alpha，不是靠押注特定行业。
+- 用**含0.3%成本的naive回测**（`score_factor`）检验，市值因子和OBV这类原本换手率极低（0.005-0.008）的慢变量因子，一旦每期都按行业均值重新中性化，换手率暴涨9-14倍，叠加交易成本后表面Sharpe转负——**这是简单粗暴的"每期全量行业中性化"实现方式带来的换手成本问题，不是alpha消失了**。
+- 冠军因子比较特殊：换手率没变但Sharpe仍大幅下降（1.26→0.076），IC却几乎不变——说明其真实多空组合层面的收益有相当一部分依赖于"行业集中度暴露"这个维度本身（而非换手成本），是这几个因子里唯一一个"IC稳但组合收益不稳"的。
+
+**实操建议**：若要实盘应用市值/OBV/ts_corr这些因子并叠加行业中性化，不应该用"每期全量重算行业中性排名"这种粗暴方式，而应该用换手率约束的组合优化（如目标行业暴露带宽内的最小换手调仓），才能同时保住IC和低成本的优势。
+
+### group_rank/group_zscore 首次真正可用后的测试结果
+
+修复过程中发现 `market_data.py` 的 `fetch_stocks()` 从未把 industry 列合并进参与**表达式求值**的 market_df（`neutralize_industry` 的行业数据合并只发生在因子值算出来之后的中性化后处理里，是两条独立数据流）。导致此前所有 `group_rank(col, industry)`/`group_zscore(col, industry)` 表达式在找不到 `industry` 列时静默退化成普通按日期rank——测出来的5个"行业内相对排名"因子数值和全市场版本一模一样（可精确到十几位小数），才发现这个问题。已在 `fetch_stocks()` 里把 industry 合并进基础 market_df（`market_data.py:713-726`），重启验证后 `group_rank`/`group_zscore` 结果确实变了。
+
+修复后测试5个行业内相对版本，score普遍B/A级、anti_overfit 4/4 PASS，部分风险指标（MaxDD）比全市场版本更优（如 `-1*group_rank(ts_corr(volume,close,10),industry)` MaxDD=-8.4% vs 全市场版-10.8%）。但正交性检验显示：**行业内版本与其全市场母版本相关性高达0.88-0.89**，本质是同一信号的行业相对改写，不是新的独立机制。
+
+**结论**：`group_rank`/`group_zscore` 这条路径不产生新的正交alpha维度，但可以作为已发现因子（尤其市值/OBV/ts_corr）的**更稳健生产实现**——行业相对构造天然降低了行业集中度风险，同时保留了大部分股票特异性edge，回撤表现通常更好。
+
+### 生产候选定案
+
+把冠军、四合一、五合一、行业相对五合一四个候选做了完整对比（详见 [docs/knowledge/findings/production-candidate-comparison.md](docs/knowledge/findings/production-candidate-comparison.md)）。**行业相对五合一**（四个正交因子的 group_rank/group_zscore 行业相对版等权叠加）风险调整后指标全场最优：IR=1.30、Sharpe=2.60、MaxDD=-7.1%（均为本轮最佳），anti_overfit 4/4 PASS 且 yearly IC 最稳定（0.090~0.116，positive_rate=86.7%全场最高）。IC绝对值(0.120)略低于五合一(0.148)，但综合风险调整后质量更优，推荐作为生产候选：
+
+```
+(-1*group_rank(volume/ts_mean(volume,60), industry))
++ (-1*group_zscore(volume/total_share, industry))
++ (-1*group_rank(ts_corr(volume,close,10), industry))
++ (-1*group_rank(close*total_share, industry))
++ (-1*group_rank(obv(close,20), industry))
+```

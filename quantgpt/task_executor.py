@@ -5,7 +5,7 @@ to offload CPU-bound pandas/numpy work to a separate process, bypassing the GIL.
 
 Configuration via environment variables:
     QUANTGPT_TASK_BACKEND  = "process" | "celery" | "thread"  (default: process)
-    QUANTGPT_WORKER_PROCESSES = int  (default: min(4, cpu_count))
+    QUANTGPT_WORKER_PROCESSES = int  (default: max(1, cpu_count - 1))
     CELERY_BROKER_URL      = redis://...  (only for celery backend)
     CELERY_RESULT_BACKEND  = redis://...  (only for celery backend)
 """
@@ -17,6 +17,7 @@ import multiprocessing as mp
 import os
 from abc import ABC, abstractmethod
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Top-level wrappers — must be picklable for ProcessPoolExecutor
 # ---------------------------------------------------------------------------
 
-_LOG_FILE = "/Users/luyumini/quant/QuantGPT/logs/mcp.log"
+_LOG_FILE = str(Path(__file__).resolve().parent.parent / "logs" / "mcp.log")
 
 
 def _setup_worker_logging():
@@ -91,7 +92,7 @@ class ProcessPoolTaskExecutor(TaskExecutor):
 
     def __init__(self):
         cpu = os.cpu_count() or 4
-        self._max_workers = int(os.environ.get("QUANTGPT_WORKER_PROCESSES", str(min(4, cpu))))
+        self._max_workers = int(os.environ.get("QUANTGPT_WORKER_PROCESSES", str(max(1, cpu - 1))))
         ctx = mp.get_context("spawn")
         self._pool = ProcessPoolExecutor(max_workers=self._max_workers, mp_context=ctx)
         logger.info(f"ProcessPoolTaskExecutor initialized with {self._max_workers} workers")

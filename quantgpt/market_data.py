@@ -88,7 +88,7 @@ def _from_rq_code(rq_code: str) -> str:
 
 # ─── TickFlow helpers ──────────────────────────────────────────────
 
-_TF_API_KEY    = "tk_067503ace4224731b7b656fe2793e5d0"
+_TF_API_KEY    = os.environ.get("TICKFLOW_API_KEY", "")
 _TF_BATCH_URL  = "https://api.tickflow.org/v1/klines/batch"
 _TF_BATCH_SIZE = 100
 _TF_BATCH_SLEEP = 1.0          # seconds between batch requests
@@ -715,6 +715,16 @@ class MarketDataFetcher:
             if "amount" in result.columns and "volume" in result.columns:
                 raw_vol = result["volume"].replace(0, np.nan)
                 result["vwap"] = result["amount"] / raw_vol
+
+            # Merge industry classification so group_rank/group_zscore('industry')
+            # and neutralize_industry can resolve it directly from the expression's
+            # input frame, not just in the post-hoc neutralization path.
+            from .neutralize import get_industry_data
+            ind_data = get_industry_data(result["stock_code"].unique().tolist())
+            if ind_data is not None and len(ind_data) > 0:
+                result = result.merge(ind_data[["stock_code", "industry"]], on="stock_code", how="left")
+                result["industry"] = result["industry"].fillna("其他")
+
             logger.info(f"Loaded {len(result):,} records for {result['stock_code'].nunique()} stocks")
             return result
         return None

@@ -150,6 +150,18 @@ def get_industry_data(stock_codes: list) -> pd.DataFrame | None:
         except Exception:
             pass
 
+    # Fall back to the most recent existing monthly snapshot (industry
+    # classification changes rarely, so a slightly stale file is fine and
+    # beats a live fetch that may be unavailable, e.g. cache-only mode).
+    existing = sorted(cache_dir.glob("industry_*.parquet"))
+    if existing:
+        try:
+            df = pd.read_parquet(existing[-1])
+            if len(df) > 100:
+                return df
+        except Exception:
+            pass
+
     # Fetch from baostock
     try:
         import baostock as bs

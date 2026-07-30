@@ -18,6 +18,7 @@ import os
 import sys
 import time
 import traceback
+from pathlib import Path
 
 import pandas as pd
 from mcp.server.fastmcp import FastMCP
@@ -42,8 +43,9 @@ from .task_executor import _run_backtest_in_process, get_executor
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s", stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-_LOG_FILE = "/Users/luyumini/quant/QuantGPT/logs/mcp.log"
-os.makedirs(os.path.dirname(_LOG_FILE), exist_ok=True)
+_LOG_FILE = Path(__file__).resolve().parent.parent / "logs" / "mcp.log"
+os.makedirs(_LOG_FILE.parent, exist_ok=True)
+_LOG_FILE = str(_LOG_FILE)
 _file_handler = logging.FileHandler(_LOG_FILE, encoding="utf-8")
 _file_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
 logging.getLogger().addHandler(_file_handler)
@@ -929,15 +931,16 @@ async def compute_factor_values(
 
         with api_context():
             fetcher = MarketDataFetcher()
-            stocks = get_universe(universe)
-            if not stocks:
-                return {"error": f"Empty universe: {universe}"}
 
             end_dt = end_date or date.today().isoformat()
             if not start_date:
                 start_dt = (date.fromisoformat(end_dt) - timedelta(days=365)).isoformat()
             else:
                 start_dt = start_date
+
+            stocks = get_universe(universe, date=start_dt)
+            if not stocks:
+                return {"error": f"Empty universe: {universe}"}
 
             d_start = date.fromisoformat(start_dt)
             d_end = date.fromisoformat(end_dt)
