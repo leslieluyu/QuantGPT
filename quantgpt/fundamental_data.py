@@ -356,7 +356,10 @@ class FundamentalDataFetcher:
             if len(fund_group) == 0:
                 result_parts.append(mkt_group)
                 continue
-            mkt_sorted = mkt_group.sort_values("trade_date")
+            mkt_sorted = mkt_group.sort_values("trade_date").copy()
+            mkt_sorted["trade_date"] = mkt_sorted["trade_date"].astype("datetime64[ns]")
+            fund_group = fund_group.copy()
+            fund_group["pub_date"] = fund_group["pub_date"].astype("datetime64[ns]")
             merged_group = pd.merge_asof(
                 mkt_sorted,
                 fund_group.drop(columns=["stock_code"]),

@@ -743,3 +743,16 @@ OBV：anti_overfit 4/4 PASS(100)，yearly IC全正(0.019-0.089)，半衰期999�
 + (-1*group_rank(close*total_share, industry))
 + (-1*group_rank(obv(close,20), industry))
 ```
+
+### 跨宇宙验证：csi500通过，hs300真实失效
+
+- **csi500**：冠军和生产候选IC都能穿越（0.068~0.070），生产候选依然优于冠军单独使用，anti_overfit 4/4 PASS。冠军单独在csi500上明显比csi1000弱（Sharpe 1.26→0.16），组合更稳健。
+- **hs300**：生产候选和冠军**真实失效**（MaxDD分别-49.5%/-95.3%，mono仅0.2-0.3），anti_overfit仅2/4 PASS，安慰剂检验FAIL（真实IC低于随机排列95分位数），2020年IC为负出现reversal。**这不是300只股票分组样本量小的噪音，是统计上确认的真实失效**——这套"缩量低换手+正交扩展"逻辑仅适用于中小盘（csi1000/csi500），不适用于沪深300等大盘蓝筹宇宙。详见 [docs/knowledge/findings/production-candidate-comparison.md](docs/knowledge/findings/production-candidate-comparison.md)。
+
+### Bug修复：hs300专属的merge_asof日期类型不一致
+
+测hs300时触发了`fundamental_data.py`里`_align_quarterly_to_daily`的`merge_asof`报错（`datetime64[us]` vs `datetime64[ns]`），是Phase8修过的同类bug在新场景下的复现——`_load_cache`会把`pub_date`/`stat_date`统一转成ns，但`market_df["trade_date"]`本身是us精度存的parquet，csi1000/csi500因为有独立的预计算factor cache绕开了这条merge_asof路径，hs300没有对应缓存所以直接走原始路径暴露了这个问题。已在merge前显式统一两侧为`datetime64[ns]`（`fundamental_data.py:359-363`），修复具有普适性，不限于hs300。
+
+### 日频(hp=5)验证：本轮全场最强结果
+
+之前全部验证都在hp=21（月频）。把生产候选（行业相对五合一）换成hp=5重新测试：**score=87.5(A), IC=0.090, IR=0.999, Sharpe=3.75(全场最高), MaxDD=-7.7%**，anti_overfit 4/4 PASS且yearly IC**逐年单调递增**(2020:0.068→2024:0.092)，WF(1窗口) test_IC=0.094/IR=0.95/decay=-0.22(样本外更强)。三种验证方法完全一致确认，是本session里最强的组合表现，代价是换手率更高(0.178 vs 月频0.055)。详见 [docs/knowledge/findings/production-candidate-comparison.md](docs/knowledge/findings/production-candidate-comparison.md)。

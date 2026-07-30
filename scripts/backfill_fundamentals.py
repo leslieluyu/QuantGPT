@@ -18,7 +18,7 @@ import argparse
 import logging
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -70,13 +70,26 @@ def _load_existing(bs_code: str) -> pd.DataFrame | None:
 
 
 def _fetch_sina_total_share(bs_code: str) -> pd.DataFrame | None:
-    """从新浪获取 total_share 季报历史，返回符合 SCHEMA_COLS 的 DataFrame。"""
+    """从新浪获取 total_share 季报历史，返回符合 SCHEMA_COLS 的 DataFrame。
+
+    akshare 内部用 requests.get() 不传 timeout，全局 socket.setdefaulttimeout()
+    对连接阶段有效但读取阶段偶发不生效，见过整个进程卡死数小时的情况。这里用一次性
+    子线程 + 硬超时兜底：超时就放弃这只股票继续下一只，卡住的线程直接丢弃(不等待)。
+    """
     sina_code = _bs_to_sina(bs_code)
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(ak.stock_financial_report_sina, stock=sina_code, symbol="资产负债表")
     try:
-        df = ak.stock_financial_report_sina(stock=sina_code, symbol="资产负债表")
+        df = future.result(timeout=25)
+    except FutureTimeoutError:
+        log.warning(f"  {bs_code}: sina 请求超时(25s)，跳过")
+        executor.shutdown(wait=False)
+        return None
     except Exception as e:
         log.warning(f"  {bs_code}: sina 请求失败 — {e}")
+        executor.shutdown(wait=False)
         return None
+    executor.shutdown(wait=False)
 
     if df is None or len(df) == 0:
         log.warning(f"  {bs_code}: sina 返回空数据")
