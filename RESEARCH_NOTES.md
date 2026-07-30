@@ -753,6 +753,10 @@ OBV：anti_overfit 4/4 PASS(100)，yearly IC全正(0.019-0.089)，半衰期999�
 
 测hs300时触发了`fundamental_data.py`里`_align_quarterly_to_daily`的`merge_asof`报错（`datetime64[us]` vs `datetime64[ns]`），是Phase8修过的同类bug在新场景下的复现——`_load_cache`会把`pub_date`/`stat_date`统一转成ns，但`market_df["trade_date"]`本身是us精度存的parquet，csi1000/csi500因为有独立的预计算factor cache绕开了这条merge_asof路径，hs300没有对应缓存所以直接走原始路径暴露了这个问题。已在merge前显式统一两侧为`datetime64[ns]`（`fundamental_data.py:359-363`），修复具有普适性，不限于hs300。
 
+### 方法论提醒：评估真实收益要用多头(strategy_returns)，不是多空(ls_returns)
+
+A股不能做空，`run_factor_backtest`返回的`ls_returns`（Top组-Bottom组）只是理论参考指标，不代表真实可交易收益。用生产候选(hp=5)跑2016-2024逐年收益时，一开始用`ls_returns`算出"9年全正、CAGR 45%"这种明显不现实的数字，改用`strategy_returns`（代码里就是Top组纯多头，注释写明"long-only, A-share"）对比等权持有全宇宙基准后，得到年化超额≈4.47%、Top组Sharpe=0.44、并非每年跑赢（2020/2022跑输）的合理结果。**以后评估任何因子的真实可交易表现，一律用`strategy_returns`/`top_group_sharpe`，`ls_returns`/`long_short_sharpe`只做统计显著性参考，不能当成预期收益。** 详见 [docs/knowledge/findings/production-candidate-comparison.md](docs/knowledge/findings/production-candidate-comparison.md)。
+
 ### 日频(hp=5)验证：本轮全场最强结果
 
 之前全部验证都在hp=21（月频）。把生产候选（行业相对五合一）换成hp=5重新测试：**score=87.5(A), IC=0.090, IR=0.999, Sharpe=3.75(全场最高), MaxDD=-7.7%**，anti_overfit 4/4 PASS且yearly IC**逐年单调递增**(2020:0.068→2024:0.092)，WF(1窗口) test_IC=0.094/IR=0.95/decay=-0.22(样本外更强)。三种验证方法完全一致确认，是本session里最强的组合表现，代价是换手率更高(0.178 vs 月频0.055)。详见 [docs/knowledge/findings/production-candidate-comparison.md](docs/knowledge/findings/production-candidate-comparison.md)。
