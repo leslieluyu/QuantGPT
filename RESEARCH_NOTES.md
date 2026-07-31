@@ -787,6 +787,6 @@ A股不能做空，`run_factor_backtest`返回的`ls_returns`（Top组-Bottom组
 
 最初的假设"融资余额=散户杠杆=负向信号"本身很弱(D级)，意外发现**融券余量占比**`rank(-1*ts_mean(short_balance/total_share,20))`才是最强的：score=79.6(B)，**mono=1.0(完美)**，anti_overfit **4/4 PASS(满分100)**，yearly IC全正(0.029~0.104)，半衰期999天(慢变量特征)，与冠军/市值/ts_corr/OBV相关性均<0.29，是第四个独立正交信号。**但覆盖率仅29%**（融资融券只对两融标的股开放，多数中小盘股票没有资格），WF因融资融券数据只到2024-12-30、卡在5年窗口边界之前一天而无法验证。
 
-**组合叠加测试为负**：等权并入五合一组合后IC从0.148降到0.138，score从87降到83.8——统计独立不等于能直接加进组合，覆盖率不足29%的字段用等权rank-sum会稀释而非增强现有信号。若要利用这个信号，需要专门针对两融标的股子集或用覆盖率加权的组合方法，不能简单等权叠加。详见 [docs/knowledge/findings/margin-short-interest-factor.md](docs/knowledge/findings/margin-short-interest-factor.md)。
+**组合叠加测试为负，深挖后定位真正原因**：等权并入五合一组合后IC从0.148降到0.138——排查发现根因不是"覆盖率稀释"而是**NaN直接传染**（`five_way+short_signal`只要short_signal是NaN，总和就是NaN，six_way有效样本从115786行暴跌到43908行，63%的股票被整个踢出分组）。用`where(x!=x,0.5,x)`把缺失值填充成中性值修复后，score回升到86.8基本追平five_way——但**即便修复NaN传播、且只看有融券数据的子集(44.9%覆盖)单独对比，加入融券信号后IC依然从0.135降到0.134，没有真实增量价值**。说明这不是覆盖率问题，是融券信号的信息含量已经被现有五个因子覆盖，等权rank-sum这种组合方式榨不出边际价值，需要更精细的加权/回归组合方法才可能利用。详见 [docs/knowledge/findings/margin-short-interest-factor.md](docs/knowledge/findings/margin-short-interest-factor.md)。
 
 北向资金数据(`stock_hsgt_individual_em`)已确认连通但按股票查询单只约28秒，全宇宙预计8-12小时，性价比低于融资融券，本session未执行。
