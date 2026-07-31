@@ -475,6 +475,43 @@ def _load_margin_data(start_date: str, end_date: str) -> pd.DataFrame | None:
     return pd.concat(frames, ignore_index=True)
 
 
+def _load_hsgt_data(start_date: str, end_date: str) -> pd.DataFrame | None:
+    """Load northbound (沪深港通/陆股通) individual-stock holding history cached
+    by scripts/backfill_hsgt.py.
+
+    Cache is one parquet per stock under data/hsgt/{sh|sz}_{code}.parquet
+    (AkShare stock_hsgt_individual_em columns, Chinese). Returns None if the
+    cache dir is empty (feature simply unused).
+    """
+    hsgt_dir = _PROJECT_ROOT / "data" / "hsgt"
+    if not hsgt_dir.exists():
+        return None
+
+    req_start, req_end = pd.Timestamp(start_date), pd.Timestamp(end_date)
+    frames = []
+    for path in hsgt_dir.glob("*.parquet"):
+        try:
+            d = pd.read_parquet(path)
+        except Exception:
+            continue
+        if len(d) == 0:
+            continue
+        d["trade_date"] = pd.to_datetime(d["持股日期"])
+        d = d[(d["trade_date"] >= req_start) & (d["trade_date"] <= req_end)]
+        if len(d) == 0:
+            continue
+        frames.append(pd.DataFrame({
+            "stock_code": d["stock_code"],
+            "trade_date": d["trade_date"],
+            "hsgt_hold_pct": pd.to_numeric(d["持股数量占A股百分比"], errors="coerce"),
+            "hsgt_net_buy_shares": pd.to_numeric(d["今日增持股数"], errors="coerce"),
+            "hsgt_net_buy_value": pd.to_numeric(d["今日增持资金"], errors="coerce"),
+        }))
+    if not frames:
+        return None
+    return pd.concat(frames, ignore_index=True)
+
+
 class MarketDataFetcher:
     """A-share market data fetcher with per-stock Parquet caching."""
 
@@ -756,6 +793,13 @@ class MarketDataFetcher:
             margin_df = _load_margin_data(start_date, end_date)
             if margin_df is not None and len(margin_df) > 0:
                 result = result.merge(margin_df, on=["stock_code", "trade_date"], how="left")
+
+            # Merge northbound (陆股通) individual-stock holding data (backfilled
+            # via scripts/backfill_hsgt.py) so expressions can reference
+            # hsgt_hold_pct/hsgt_net_buy_shares/hsgt_net_buy_value directly.
+            hsgt_df = _load_hsgt_data(start_date, end_date)
+            if hsgt_df is not None and len(hsgt_df) > 0:
+                result = result.merge(hsgt_df, on=["stock_code", "trade_date"], how="left")
 
             logger.info(f"Loaded {len(result):,} records for {result['stock_code'].nunique()} stocks")
             return result

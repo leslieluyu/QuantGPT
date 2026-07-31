@@ -853,7 +853,8 @@ class ExpressionParser:
         col_name = expr_lower.strip()
         from .fundamental_data import ALL_FUNDAMENTAL_NAMES
         _PRICE_COLUMNS = {'open', 'high', 'low', 'close', 'volume', 'amount', 'pct_change', 'market_cap', 'shares',
-                          'margin_balance', 'margin_buy', 'short_balance', 'short_sell'}
+                          'margin_balance', 'margin_buy', 'short_balance', 'short_sell',
+                          'hsgt_hold_pct', 'hsgt_net_buy_shares', 'hsgt_net_buy_value'}
         _ALLOWED_COLUMNS = _PRICE_COLUMNS | ALL_FUNDAMENTAL_NAMES
         _ALIAS_MAP = {
             'pe_ratio': 'pe', 'pe_ttm': 'pe', 'pb_ratio': 'pb', 'ps_ratio': 'ps',

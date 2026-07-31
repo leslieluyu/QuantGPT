@@ -36,6 +36,8 @@
 | **组合叠加** | 冠军 + ts_corr + 市值 + OBV | ✅ 已验证，**真实多头排名与理论多空排名不同** | 真实多头(hp=21)：**五合一**CAGR=24.6%/超额+13.0%/TopSharpe=1.16 **全场最优**；行业相对五合一CAGR=20.6%/超额+8.9%；四合一CAGR=21.6%/超额+9.9%。hp=5下冠军/ts_corr单独超额为负(跑输基准) | — | 用理论多空(`ls_returns`)数字时"行业相对五合一"看起来最强，但真实多头(`strategy_returns`)重验后**五合一才是真实最优**，anti_overfit 4/4 + WF(test_IC=0.1475,IR=1.00,decay=-0.21)三重确认。详见 [production-candidate-comparison.md](docs/knowledge/findings/production-candidate-comparison.md) |
 | 行业相对排名 | group_rank/group_zscore | ✅ 已测试=非新维度 | score普遍B/A,anti_overfit 4/4,但与全市场母版本相关性0.88-0.89 | 低(作为新alpha) | 不是新正交信号，是已发现因子的行业相对改良实现（MaxDD更优，可用于生产） |
 | 条件/regime因子 | trade_when(...) | ⬜ 从未测试 | — | 低 | 工程复杂度高，且没有明确的regime信号候选 |
+| **融资融券** | rank(-1\*ts_mean(short_balance/total_share,20)) | ✅ 已验证=统计正交但**组合无增量价值** | score=79.6(B), IC=0.069, mono=1.0, anti_overfit 4/4, 与冠军/市值/ts_corr/OBV相关性均<0.29；但等权并入组合后修复NaN传染也无提升 | 低(单独可用/组合不可用) | 覆盖率29%(仅两融标的股)；详见 [margin-short-interest-factor.md](docs/knowledge/findings/margin-short-interest-factor.md) |
+| 北向资金(陆股通) | hsgt_hold_pct水平/变化/均值等8种变体 | ❌ 已测试=弱 | 最强变体score=52.5(C), IC=0.031, mono=0.5(弱), top_group_sharpe≈0；本地IC扫描(3种前瞻窗口×8种变体)全部|IC|<0.04 | 低 | 覆盖率30.7%(仅陆股通标的股)，csi1000宇宙下无竞争力；详见 [hsgt-northbound-flow-weak.md](docs/knowledge/failures/hsgt-northbound-flow-weak.md)。可能在hs300上更有效(未验证成功，宇宙数据窗口不足) |
 | **跨宇宙验证** | csi1000(原生)/csi500/csi2000/hs300 | ✅ 已验证(五合一版本) | csi500(IC=0.102)/csi2000(IC=0.143,4/4满分)通过；**hs300是"谨慎"而非"完全失效"**：五合一在hs300上anti_overfit 3/4 PASS,安慰剂检验通过(此前测的冠军/行业相对版是2/4 FAIL,安慰剂不通过) | — | 五合一比冠军单独/行业相对版在hs300上更稳健(真实但弱的信号)，但MaxDD仍达-79.4%，不建议直接实盘部署。中小盘(csi1000/csi500/csi2000)三宇宙稳健推荐 |
 
 **当前状态（2026-07-31）**：总纲表里列出的全部方向均已测试或明确归类关闭，累计发现3个独立正交信号（ts_corr/市值/OBV）+ 三宇宙交叉验证通过 + 明确了大盘蓝筹边界(hs300失效)。**关键待办**：目前排行榜里的Sharpe/MaxDD大多数仍是理论多空(`ls_returns`)数字，A股不能做空，需要逐个换成真实多头(`strategy_returns`)重新验证，已发现两者差异巨大（多空版CAGR 45% vs 真实多头CAGR超额4.5%）。详见下方"研究现状 & TODO"。
@@ -793,6 +795,18 @@ A股不能做空，`run_factor_backtest`返回的`ls_returns`（Top组-Bottom组
 
 ---
 
+## Phase 13：北向资金回填完成 + 测试无果（2026-07-31）
+
+`backfill_hsgt.py`后台跑完：csi1000+csi500共1500只，成功1071只(71.4%)，耗时281分钟，数据覆盖到2024-08-16(接口历史本身的截止点，早于价格/融资融券数据)。
+
+接入`market_data.py::_load_hsgt_data()`+`expression_parser.py`白名单，新增`hsgt_hold_pct`(持股占比)/`hsgt_net_buy_shares`/`hsgt_net_buy_value`三个字段。csi1000内覆盖率30.7%(北向资金只能买陆股通标的股，中小盘大部分股票没资格，与融资融券覆盖率29%是同一类现象)。
+
+本地对8种变体(水平值/20-60-120日变化/20-60日均值/归一化变化/增持股数均值/60日累计增持)在3种前瞻窗口(21/60/120日)扫描IC，全部很弱(|IC|<0.04)；最强的`hold_pct_chg60`(60日北向持股占比变化)是一个弱反转信号(60日窗口IC=-0.034)。用`score_factor`在标准协议(csi1000/hp=21)复核两个候选，均为C级(score 50-52.5)，单调性差，top_group_sharpe≈0或为负。
+
+**结论：北向资金个股持股数据在当前协议下不是第五个正交信号**，未继续深挖(不像融券信号那样单独指标能到B级/anti_overfit满分)。详见 [hsgt-northbound-flow-weak.md](docs/knowledge/failures/hsgt-northbound-flow-weak.md)。
+
+---
+
 ## 当前状态总结（2026-07-31 会话结束时）
 
 ### 核心成果
@@ -823,7 +837,8 @@ A股不能做空，`run_factor_backtest`返回的`ls_returns`（Top组-Bottom组
 
 ### 待办（下次session）
 
-- [ ] 检查北向资金回填结果，测试是否为第五个正交信号
+- [x] 检查北向资金回填结果，测试是否为第五个正交信号 — **已完成，结论为负**：8种变体×3种前瞻窗口本地IC扫描+score_factor复核，均弱于已有信号(最强C级)，不建议继续投入，见Phase 13
 - [ ] trade_when/regime因子（总纲表里唯一没测过的机制大类）
 - [ ] 若融券信号要用，探索加权/回归组合方法（而非等权rank-sum）
 - [ ] 半年报披露(8月31日截止)后重新跑`backfill_fundamentals.py`刷新最新季度
+- [ ] （新发现）TickFlow API key 疑似失效：本session多次调用返回`401 Unauthorized`，价格数据回退到baostock未受影响，但需要检查key是否需要重新申请/激活
