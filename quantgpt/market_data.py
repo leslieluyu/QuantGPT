@@ -450,6 +450,31 @@ def _transform_rq_to_schema(rq_df: pd.DataFrame, bs_code: str) -> pd.DataFrame:
     return result.sort_values("trade_date")
 
 
+def _load_margin_data(start_date: str, end_date: str) -> pd.DataFrame | None:
+    """Load daily margin financing/short-selling data cached by scripts/backfill_margin.py.
+
+    Cache is one parquet per trading day under data/margin/{YYYYMMDD}.parquet
+    (columns: stock_code, trade_date, margin_balance, margin_buy, short_balance,
+    short_sell). Returns None if the cache dir is empty (feature simply unused).
+    """
+    margin_dir = _PROJECT_ROOT / "data" / "margin"
+    if not margin_dir.exists():
+        return None
+
+    req_start, req_end = pd.Timestamp(start_date), pd.Timestamp(end_date)
+    frames = []
+    for path in margin_dir.glob("*.parquet"):
+        try:
+            d = pd.Timestamp(path.stem)
+        except ValueError:
+            continue
+        if req_start <= d <= req_end:
+            frames.append(pd.read_parquet(path))
+    if not frames:
+        return None
+    return pd.concat(frames, ignore_index=True)
+
+
 class MarketDataFetcher:
     """A-share market data fetcher with per-stock Parquet caching."""
 
@@ -724,6 +749,13 @@ class MarketDataFetcher:
             if ind_data is not None and len(ind_data) > 0:
                 result = result.merge(ind_data[["stock_code", "industry"]], on="stock_code", how="left")
                 result["industry"] = result["industry"].fillna("其他")
+
+            # Merge daily margin financing/short-selling data (SSE+SZSE, backfilled
+            # via scripts/backfill_margin.py) so expressions can reference
+            # margin_balance/margin_buy/short_balance/short_sell directly.
+            margin_df = _load_margin_data(start_date, end_date)
+            if margin_df is not None and len(margin_df) > 0:
+                result = result.merge(margin_df, on=["stock_code", "trade_date"], how="left")
 
             logger.info(f"Loaded {len(result):,} records for {result['stock_code'].nunique()} stocks")
             return result

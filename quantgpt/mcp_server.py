@@ -89,6 +89,8 @@ _VALIDATION_DUMMY = pd.DataFrame({
     "volume": [100, 200, 300], "amount": [100, 400, 900],
     "pct_change": [0, 100, 50],
     "trade_date": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+    "margin_balance": [1.0, 1.1, 1.2], "margin_buy": [1.0, 1.1, 1.2],
+    "short_balance": [1.0, 1.1, 1.2], "short_sell": [1.0, 1.1, 1.2],
     **{name: [1.0, 1.1, 1.2] for name in ALL_FUNDAMENTAL_NAMES},
 })
 

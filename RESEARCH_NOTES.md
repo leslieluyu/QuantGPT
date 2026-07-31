@@ -318,7 +318,8 @@ rank(-1*ts_std(close/ts_shift(close,1)-1, 15)) + (-1*rank(volume/ts_mean(volume,
 #### 🟢 P2：需要新数据源（探索性，本session未验证可行性）
 
 - [ ] **baostock现金流API**：`query_cash_flow_data`，质量因子方向，尚未确认baostock在当前沙箱环境下是否可用（本session多次遇到baostock网络不通）
-- [ ] **融资融券/北向资金数据（AkShare）**：需先确认历史数据长度和当前环境的抓取可行性（akshare本身是通的，见Sina财务接口测试，但具体这两个数据源未验证）
+- [x] **融资融券数据（AkShare）**：已完成。`scripts/backfill_margin.py`按交易日抓取沪深两市明细(2020-2024共952天，97.5%成功)，接入`market_data.py`/`expression_parser.py`。发现第四个正交信号`rank(-1*ts_mean(short_balance/total_share,20))`(融券余量占比，score=79.6,anti_overfit 4/4满分,与已有因子相关性0.08~0.29均<0.3)，但覆盖率仅29%(两融标的股限制)，等权并入五合一组合反而拉低IC(0.148→0.138)，不建议直接叠加。详见[margin-short-interest-factor.md](docs/knowledge/findings/margin-short-interest-factor.md)
+- [ ] **北向资金数据（AkShare）**：`stock_hsgt_individual_em`已确认可连通但单只股票查询耗时~28秒，全宇宙(~1500只)预计8-12小时，性价比低于融资融券，暂未执行
 - [ ] **分钟线数据**：TickFlow是否支持分钟级批量下载尚未确认
 - [ ] **WQ Brain提交**：`wq_brain_submit`等工具已可用但本session未使用，需要WorldQuant BRAIN账号配置
 
@@ -699,8 +700,9 @@ OBV：anti_overfit 4/4 PASS(100)，yearly IC全正(0.019-0.089)，半衰期999�
 1. `ts_corr(volume, close, 10)` — 量价短期相关性
 2. `close*total_share`（市值） — 慢变量，近乎不衰减
 3. `obv(close, 20)` — OBV动量，同样是慢变量特征
+4. `ts_mean(short_balance/total_share, 20)`（融券余量占比，2026-07-31新增） — 慢变量，但覆盖率仅29%(两融标的限制)，等权并入组合会拉低IC，需要更精细的组合方法才能真正利用(见Phase12)
 
-三者两两相关性也都很低，是真正独立的三个维度。
+前三者两两相关性都很低，是真正独立的三个维度，且都已验证组合叠加有真实增益。第四个(融券)统计上独立但因覆盖率问题，直接等权叠加是负收益，需谨慎使用。
 
 ---
 
@@ -770,3 +772,21 @@ A股不能做空，`run_factor_backtest`返回的`ls_returns`（Top组-Bottom组
 ### 日频(hp=5)验证：本轮全场最强结果
 
 之前全部验证都在hp=21（月频）。把生产候选（行业相对五合一）换成hp=5重新测试：**score=87.5(A), IC=0.090, IR=0.999, Sharpe=3.75(全场最高), MaxDD=-7.7%**，anti_overfit 4/4 PASS且yearly IC**逐年单调递增**(2020:0.068→2024:0.092)，WF(1窗口) test_IC=0.094/IR=0.95/decay=-0.22(样本外更强)。三种验证方法完全一致确认，是本session里最强的组合表现，代价是换手率更高(0.178 vs 月频0.055)。详见 [docs/knowledge/findings/production-candidate-comparison.md](docs/knowledge/findings/production-candidate-comparison.md)。
+
+---
+
+## Phase 12：融资融券数据接入 + 第四个正交信号（2026-07-31）
+
+### 数据接入
+
+新增 `scripts/backfill_margin.py`，用AkShare(`stock_margin_detail_sse`/`_szse`)按交易日抓取沪深两市融资融券每日明细(2020-2024共976个真实交易日，成功回填952天/97.5%，单线程约223分钟)。踩了两个坑：
+1. 交易日历用某只股票的缓存价格数据反推，结果samples到的文件混入了236天脏周末数据(1212天里有236天是周末！)——加了`dayofweek<5`过滤修复
+2. `margin_balance`/`margin_buy`/`short_balance`/`short_sell`四个字段需要同时接入`market_data.py`(按`[stock_code,trade_date]`merge)和`expression_parser.py`的字段白名单才能在表达式里使用——只加一处会在另一处报`Unknown column`
+
+### 第四个正交信号：融券余量占比
+
+最初的假设"融资余额=散户杠杆=负向信号"本身很弱(D级)，意外发现**融券余量占比**`rank(-1*ts_mean(short_balance/total_share,20))`才是最强的：score=79.6(B)，**mono=1.0(完美)**，anti_overfit **4/4 PASS(满分100)**，yearly IC全正(0.029~0.104)，半衰期999天(慢变量特征)，与冠军/市值/ts_corr/OBV相关性均<0.29，是第四个独立正交信号。**但覆盖率仅29%**（融资融券只对两融标的股开放，多数中小盘股票没有资格），WF因融资融券数据只到2024-12-30、卡在5年窗口边界之前一天而无法验证。
+
+**组合叠加测试为负**：等权并入五合一组合后IC从0.148降到0.138，score从87降到83.8——统计独立不等于能直接加进组合，覆盖率不足29%的字段用等权rank-sum会稀释而非增强现有信号。若要利用这个信号，需要专门针对两融标的股子集或用覆盖率加权的组合方法，不能简单等权叠加。详见 [docs/knowledge/findings/margin-short-interest-factor.md](docs/knowledge/findings/margin-short-interest-factor.md)。
+
+北向资金数据(`stock_hsgt_individual_em`)已确认连通但按股票查询单只约28秒，全宇宙预计8-12小时，性价比低于融资融券，本session未执行。
