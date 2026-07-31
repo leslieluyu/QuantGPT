@@ -789,4 +789,41 @@ A股不能做空，`run_factor_backtest`返回的`ls_returns`（Top组-Bottom组
 
 **组合叠加测试为负，深挖后定位真正原因**：等权并入五合一组合后IC从0.148降到0.138——排查发现根因不是"覆盖率稀释"而是**NaN直接传染**（`five_way+short_signal`只要short_signal是NaN，总和就是NaN，six_way有效样本从115786行暴跌到43908行，63%的股票被整个踢出分组）。用`where(x!=x,0.5,x)`把缺失值填充成中性值修复后，score回升到86.8基本追平five_way——但**即便修复NaN传播、且只看有融券数据的子集(44.9%覆盖)单独对比，加入融券信号后IC依然从0.135降到0.134，没有真实增量价值**。说明这不是覆盖率问题，是融券信号的信息含量已经被现有五个因子覆盖，等权rank-sum这种组合方式榨不出边际价值，需要更精细的加权/回归组合方法才可能利用。详见 [docs/knowledge/findings/margin-short-interest-factor.md](docs/knowledge/findings/margin-short-interest-factor.md)。
 
-北向资金数据(`stock_hsgt_individual_em`)已确认连通但按股票查询单只约28秒，全宇宙预计8-12小时，性价比低于融资融券，本session未执行。
+北向资金数据(`stock_hsgt_individual_em`)已确认连通但按股票查询单只约28秒；已写`scripts/backfill_hsgt.py`并在后台启动跑csi1000+csi500共1500只(实测速度~10s/只，比预计快，约4小时可跑完)，结果留待下次session验证。
+
+---
+
+## 当前状态总结（2026-07-31 会话结束时）
+
+### 核心成果
+
+**冠军因子 `amtrev_x_turn_v2` 之外，累计发现4个正交信号**（与冠军相关性均<0.3）：
+1. `ts_corr(volume, close, 10)` — 量价短期相关性（相关性0.265）
+2. `close*total_share`（市值/规模） — 慢变量，半衰期999天（相关性-0.03）
+3. `obv(close, 20)` — OBV量能动量，同样是慢变量特征（相关性0.24）
+4. `ts_mean(short_balance/total_share, 20)`（融券余量占比） — 统计独立(相关性0.08~0.29)但**组合叠加无增量价值**（NaN传染修复后依然如此），暂不建议使用
+
+**当前推荐生产候选**：**五合一**（冠军 + 前3个正交因子等权叠加，`hp=21`月频）
+```
+(-1*rank(volume/ts_mean(volume,60))) + rank(-1*ts_mean(volume/total_share,60))
++ rank(-1*ts_corr(volume,close,10)) + rank(-1*close*total_share) + rank(-1*obv(close,20))
+```
+- 真实多头验证：CAGR超额+13.0%，Top组Sharpe=1.16（全场真实收益最优，反超此前基于理论多空数字推荐的"行业相对五合一"）
+- anti_overfit 4/4 PASS + WF 4个窗口全部稳定(test_IC 0.14-0.15,IR~1.0,decay为负)
+- 跨宇宙：csi500/csi2000稳健通过（csi2000 IC=0.143最高），hs300"谨慎观察"（信号真实但弱，MaxDD-79.4%不建议直接部署）
+- 备选：`行业相对五合一`（group_rank版本，MaxDD更低-7.1%，风险更保守）；hp=5周频版本Sharpe更高(3.75)但换手成本更高
+
+### 关键方法论教训（供下次session参考）
+
+1. **A股不能做空** — 评估真实收益必须用`strategy_returns`(多头)，`ls_returns`(多空)只做统计参考，两者排名可能完全不同
+2. **理论多空排名≠真实多头排名** — "行业相对五合一"理论数字最强，但真实多头验证后"五合一"才是最优
+3. **NaN会传染** — 低覆盖率字段直接加进rank-sum组合，NaN会传播到整个和，等效于砍掉整个子集的样本，务必用`where(x!=x,0.5,x)`兜底
+4. **相关性低≠组合有增量价值** — 融券信号统计独立但对组合IC无贡献，正交性是必要非充分条件
+5. **每次改QuantGPT源码(`quantgpt/*.py`)都需要重启MCP server**（VSCode Reload Window），本session修了8+处基础设施bug，均遵循"本地脚本验证→请求重启→复测"流程
+
+### 待办（下次session）
+
+- [ ] 检查北向资金回填结果，测试是否为第五个正交信号
+- [ ] trade_when/regime因子（总纲表里唯一没测过的机制大类）
+- [ ] 若融券信号要用，探索加权/回归组合方法（而非等权rank-sum）
+- [ ] 半年报披露(8月31日截止)后重新跑`backfill_fundamentals.py`刷新最新季度
