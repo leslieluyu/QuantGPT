@@ -131,25 +131,40 @@ def _fetch_sina_total_share(bs_code: str) -> pd.DataFrame | None:
     return out
 
 
+STALE_DAYS = 100  # latest pub_date older than this ⇒ 需要往前刷新最新一期
+
+
 def backfill_one(bs_code: str, target_year: int) -> str:
-    """处理一只股票，返回状态字符串。"""
+    """处理一只股票，返回状态字符串。
+
+    同时做两件事：往回补历史(到 target_year) + 往前刷新最新一期(避免财报
+    停留在几个季度之前——旧逻辑只检查最早日期，已覆盖历史的股票永远不会
+    再去看新浪有没有更新的季报，导致 total_share 长期滞后于实际披露进度)。
+    """
     existing = _load_existing(bs_code)
 
-    # 检查是否需要回填
+    needs_backward = True
+    needs_forward = True
     if existing is not None and len(existing) > 0:
         earliest = existing["pub_date"].min()
-        if earliest.year <= target_year:
-            return f"{bs_code}: SKIP (已有 {earliest.date()})"
-        cutoff = pd.Timestamp(f"{target_year}-01-01")
-    else:
-        cutoff = pd.Timestamp(f"{target_year}-01-01")
+        latest = existing["pub_date"].max()
+        needs_backward = earliest.year > target_year
+        needs_forward = (pd.Timestamp.now() - latest).days > STALE_DAYS
+        if not needs_backward and not needs_forward:
+            return f"{bs_code}: SKIP (已有 {earliest.date()}~{latest.date()}，均满足)"
 
     sina_df = _fetch_sina_total_share(bs_code)
     if sina_df is None or len(sina_df) == 0:
         return f"{bs_code}: FAIL (sina 无数据)"
 
-    # 只取 cutoff 之前的新数据
-    new_rows = sina_df[sina_df["pub_date"] < (existing["pub_date"].min() if existing is not None else pd.Timestamp("2099-01-01"))]
+    if existing is not None and len(existing) > 0:
+        # 往回(早于已有最早) + 往前(晚于已有最新) 两段都要
+        new_rows = sina_df[
+            (sina_df["pub_date"] < existing["pub_date"].min())
+            | (sina_df["pub_date"] > existing["pub_date"].max())
+        ]
+    else:
+        new_rows = sina_df
     new_rows = new_rows[new_rows["pub_date"] >= pd.Timestamp("2001-01-01")]
 
     if len(new_rows) == 0:
@@ -195,13 +210,16 @@ def main():
                 break
     codes = sorted(all_codes)
 
-    # 筛选需要回填的股票
+    # 筛选需要回填的股票（历史不够早 或 最新一期已经滞后 STALE_DAYS 天）
     needs_backfill = []
     for code in codes:
         existing = _load_existing(code)
         if existing is None or len(existing) == 0:
             needs_backfill.append(code)
-        elif existing["pub_date"].min().year > args.target_year:
+            continue
+        earliest_stale = existing["pub_date"].min().year > args.target_year
+        latest_stale = (pd.Timestamp.now() - existing["pub_date"].max()).days > STALE_DAYS
+        if earliest_stale or latest_stale:
             needs_backfill.append(code)
 
     log.info("=" * 65)
